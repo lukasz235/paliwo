@@ -47,6 +47,9 @@ aplikacji w trybie Testing: kliknij „Zaawansowane” → „Przejdź do Paliwo
 ### 5. Udostępnij arkusz innym użytkownikom
 W Google Sheets: **Udostępnij** → dodaj osoby jako **Edytujący**. Muszą też być na liście Test users (krok 1.4).
 
+## Karta „Miesiące” w arkuszu
+Formuły sumują miesiące (24 wstecz od bieżącego) ze wszystkich trzech aut: tankowania, litry, wydatki, średnia cena, spalanie i koszt na 100 km oraz wydatki i spalanie każdego auta osobno. Nic nie trzeba wpisywać. Spalanie miesiąca liczy się z odcinków, które kończą się w tym miesiącu. Formuły sięgają wiersza 400 na kartach aut.
+
 ## Kolumny w arkuszu
 A–H: data, przebieg, litry, cena, kwota (po zniżce), stacja, paliwo, do pełna. I–P: formuły (nie ruszać).
 Q: uwagi. **R–U (nowe):** zniżka łącznie (zł), litry ze zniżką, szerokość i długość geograficzna.

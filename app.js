@@ -32,6 +32,8 @@
     otherStation: false,
     loc: null,
     statFuel: '',
+    openMonths: new Set(),
+    monthsInit: false,
     loaded: false,
   };
   if (!CFG.CARS.includes(state.car)) state.car = CFG.CARS[0];
@@ -609,6 +611,53 @@
     if (e.target.closest('button[data-more]')) setTab('history');
   });
 
+  // ---------- Historia: podsumowania miesięczne ----------
+  function monthLabel(key) {
+    const n = new Date(key + '-15T12:00:00').toLocaleDateString('pl-PL', { month: 'long', year: 'numeric' });
+    return n.charAt(0).toUpperCase() + n.slice(1);
+  }
+  function monthShort(key) {
+    return new Date(key + '-15T12:00:00').toLocaleDateString('pl-PL', { month: 'short' }).replace('.', '');
+  }
+  function nextMonth(key) {
+    const y = Number(key.slice(0, 4));
+    const m = Number(key.slice(5, 7));
+    return m === 12 ? (y + 1) + '-01' : y + '-' + String(m + 1).padStart(2, '0');
+  }
+
+  // Wykres słupkowy: wydatki w ostatnich miesiącach (do 12), także miesiące bez tankowań.
+  function monthsChartSvg(costByMonth, curKey) {
+    const keys = Object.keys(costByMonth).filter((k) => /^\d{4}-\d{2}$/.test(k)).sort();
+    if (!keys.length) return '';
+    const all = [];
+    for (let k = keys[0]; k <= curKey && all.length < 240; k = nextMonth(k)) all.push(k);
+    const list = all.slice(-12);
+    const W = 340, H = 150, pl = 6, pr = 6, pt = 18, pb = 20;
+    const max = Math.max(1, ...list.map((k) => costByMonth[k] || 0));
+    const slot = (W - pl - pr) / list.length;
+    const bw = Math.min(26, slot * 0.7);
+    let g = '';
+    list.forEach((k, i) => {
+      const v = costByMonth[k] || 0;
+      const h = (v / max) * (H - pt - pb);
+      const x = pl + i * slot + (slot - bw) / 2;
+      const y = H - pb - h;
+      g += '<rect class="bar' + (k === curKey ? ' cur' : '') + '" x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + bw.toFixed(1) + '" height="' + Math.max(h, v > 0 ? 1 : 0).toFixed(1) + '" rx="3"/>';
+      if (v > 0 && (list.length <= 8 || k === curKey)) {
+        g += '<text class="val" text-anchor="middle" x="' + (x + bw / 2).toFixed(1) + '" y="' + (y - 4).toFixed(1) + '">' + fmtInt(v) + '</text>';
+      }
+      g += '<text text-anchor="middle" x="' + (x + bw / 2).toFixed(1) + '" y="' + (H - 6) + '">' + esc(monthShort(k)) + '</text>';
+    });
+    return '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="Wydatki miesięczne">' + g + '</svg>';
+  }
+
+  function deltaHtml(cur, prev) {
+    if (cur == null || prev == null) return '';
+    const d = cur - prev;
+    if (Math.abs(d) < 0.05) return '';
+    return ' <span class="' + (d < 0 ? 'dn' : 'up') + '">' + (d < 0 ? '▼' : '▲') + ' ' + fmt(Math.abs(d), 1) + '</span>';
+  }
+
   function renderHistory() {
     const box = $('#view-history');
     const d = state.data[state.car];
@@ -621,20 +670,71 @@
       box.innerHTML = '<div class="card center muted">Brak tankowań dla ' + esc(state.car) + '.</div>';
       return;
     }
-    const month = todayISO().slice(0, 7);
-    const monthName = new Date(month + '-15T12:00:00').toLocaleDateString('pl-PL', { month: 'long', year: 'numeric' });
-    const sumCard = (title, o) =>
-      '<div class="card"><div class="muted" style="margin-bottom:8px">' + esc(title) + '</div><div class="grid3">' +
+    const curKey = todayISO().slice(0, 7);
+    if (!state.monthsInit) {
+      state.openMonths.add(curKey);
+      state.monthsInit = true;
+    }
+    const o = L.computeOverall(stats);
+    const groups = new Map(); // klucz miesiąca -> wpisy (od najnowszego)
+    stats.forEach((s) => {
+      const k = (s.entry.date || '').slice(0, 7) || 'brak';
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(s);
+    });
+    const keys = [...groups.keys()].sort().reverse();
+    const overall = new Map(keys.map((k) => [k, L.computeOverall(groups.get(k))]));
+    const costByMonth = {};
+    keys.forEach((k) => { costByMonth[k] = overall.get(k).totalCost; });
+
+    let html =
+      '<div class="card"><div class="muted" style="margin-bottom:8px">Cały okres</div><div class="grid3">' +
       '<div class="stat"><div class="l">Tankowań</div><div class="v">' + o.count + '</div></div>' +
       '<div class="stat"><div class="l">Litry</div><div class="v">' + fmt(o.totalLiters, 1) + '</div></div>' +
       '<div class="stat"><div class="l">Śr. cena</div><div class="v">' + (o.avgPrice != null ? fmt(o.avgPrice) + ' zł' : '—') + '</div></div>' +
       '</div></div>';
-    const inMonth = stats.filter((s) => (s.entry.date || '').startsWith(month));
-    box.innerHTML =
-      sumCard('Cały okres', L.computeOverall(stats)) +
-      sumCard(monthName.charAt(0).toUpperCase() + monthName.slice(1), L.computeOverall(inMonth)) +
-      stats.map(entryHtml).join('');
+    const chart = monthsChartSvg(costByMonth, curKey);
+    if (chart) html += '<div class="card"><div class="muted">Wydatki na paliwo miesięcznie (zł)</div>' + chart + '</div>';
+
+    keys.forEach((k, i) => {
+      const om = overall.get(k);
+      const open = state.openMonths.has(k);
+      const label = k === 'brak' ? 'Bez daty' : monthLabel(k);
+      // poprzedni (starszy) miesiąc ze zmierzonym spalaniem
+      let prev = null;
+      for (let j = i + 1; j < keys.length; j++) {
+        const pj = overall.get(keys[j]);
+        if (pj.avgConsumption != null) { prev = pj.avgConsumption; break; }
+      }
+      html += '<div class="card mcard" data-month="' + k + '"><div class="row mhead"><b>' + esc(label) + '</b><span class="chev">' + (open ? '▾' : '▸') + '</span></div>';
+      if (open) {
+        html +=
+          '<div class="grid3" style="margin-top:8px">' +
+          '<div class="stat"><div class="l">Wydano</div><div class="v">' + fmt(om.totalCost, 0) + ' zł</div></div>' +
+          '<div class="stat"><div class="l">Tankowań</div><div class="v">' + om.count + '</div></div>' +
+          '<div class="stat"><div class="l">Litry</div><div class="v">' + fmt(om.totalLiters, 1) + '</div></div></div>' +
+          '<div class="grid3" style="margin-top:8px">' +
+          '<div class="stat"><div class="l">Śr. spalanie</div><div class="v">' + (om.avgConsumption != null ? fmt(om.avgConsumption, 1) + deltaHtml(om.avgConsumption, prev) : '—') + '</div></div>' +
+          '<div class="stat"><div class="l">zł / 100 km</div><div class="v">' + (om.avgCostPer100 != null ? fmt(om.avgCostPer100, 1) : '—') + '</div></div>' +
+          '<div class="stat"><div class="l">Śr. cena</div><div class="v">' + (om.avgPrice != null ? fmt(om.avgPrice) : '—') + '</div></div></div>' +
+          '<div class="mentries">' + groups.get(k).map(entryHtml).join('') + '</div>';
+      } else {
+        html += '<div class="muted" style="margin-top:4px">' + om.count + ' ' + (om.count === 1 ? 'tankowanie' : 'tankowań') + ' · ' + fmt(om.totalCost, 0) + ' zł' +
+          (om.avgConsumption != null ? ' · ' + fmt(om.avgConsumption, 1) + ' l/100' : '') + '</div>';
+      }
+      html += '</div>';
+    });
+    box.innerHTML = html;
   }
+
+  $('#view-history').addEventListener('click', (e) => {
+    const h = e.target.closest('.mhead');
+    if (!h) return;
+    const k = h.closest('.mcard').dataset.month;
+    if (state.openMonths.has(k)) state.openMonths.delete(k);
+    else state.openMonths.add(k);
+    renderHistory();
+  });
 
   async function onEntryClick(e) {
     const card = e.target.closest('.entry');

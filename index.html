@@ -45,6 +45,14 @@
   .chart .ln { fill: none; stroke: var(--accent); stroke-width: 2.5; stroke-linejoin: round; }
   .chart .dot { fill: var(--accent); }
   .chart .grid { stroke: var(--line); }
+  .chart .bar { fill: var(--accent); opacity: .5; }
+  .chart .bar.cur { opacity: 1; }
+  .mhead { cursor: pointer; }
+  .chev { color: var(--muted); }
+  .up { color: var(--bad); font-size: 12px; font-weight: 600; }
+  .dn { color: var(--good); font-size: 12px; font-weight: 600; }
+  .mentries { margin-top: 10px; }
+  .mentries .entry { background: var(--bg); margin-bottom: 8px; }
   .chart .val { fill: var(--text); font-weight: 600; }
   label { display: block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
   input[type=text], input[type=date], input[type=number], input:not([type]) {
