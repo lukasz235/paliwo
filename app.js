@@ -36,8 +36,11 @@
   };
   if (!CFG.CARS.includes(state.car)) state.car = CFG.CARS[0];
 
+  const lsGet = (k) => { try { return localStorage.getItem(k); } catch (e) { return null; } };
+  const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch (e) { /* tryb prywatny */ } };
+  const lsDel = (k) => { try { localStorage.removeItem(k); } catch (e) { /* tryb prywatny */ } };
   try {
-    const t = JSON.parse(sessionStorage.getItem('tok') || 'null');
+    const t = JSON.parse(lsGet('tok') || 'null');
     if (t && t.e > Date.now()) {
       state.token = t.t;
       state.tokenExp = t.e;
@@ -55,11 +58,15 @@
   }
 
   // ---------- Logowanie Google ----------
+  // Google daje token dostępu na ok. godzinę. Żeby nie wylogowywało: token jest zapamiętany w telefonie,
+  // a po wygaśnięciu aplikacja po cichu prosi Google o nowy (to działa, dopóki konto jest zalogowane w przeglądarce
+  // i zgoda nie wygasła). Ostatnie dane są też w pamięci telefonu, więc aplikacja otwiera się od razu.
   let tokenClient = null;
+  let pending = null; // trwające odnawianie tokenu
 
   function showLogin(msg, isErr) {
     state.token = null;
-    sessionStorage.removeItem('tok');
+    lsDel('tok');
     $('#app').hidden = true;
     $('#login-view').hidden = false;
     const el = $('#login-err');
@@ -78,14 +85,31 @@
     renderAll();
   }
 
-  function onToken(resp) {
-    if (resp.error) {
-      showLogin('Logowanie nie powiodło się: ' + resp.error, true);
-      return;
-    }
+  function setStale(on) {
+    $('#stale-banner').hidden = !on;
+  }
+
+  function saveToken(resp) {
     state.token = resp.access_token;
     state.tokenExp = Date.now() + (Number(resp.expires_in) - 60) * 1000;
-    sessionStorage.setItem('tok', JSON.stringify({ t: state.token, e: state.tokenExp }));
+    lsSet('tok', JSON.stringify({ t: state.token, e: state.tokenExp }));
+    lsSet('consent', '1');
+  }
+
+  function onToken(resp) {
+    const p = pending;
+    pending = null;
+    if (resp.error) {
+      if (p) p.reject(new Error(resp.error));
+      else showLogin('Logowanie nie powiodło się: ' + resp.error, true);
+      return;
+    }
+    saveToken(resp);
+    if (p) {
+      p.resolve();
+      return;
+    }
+    setStale(false);
     showApp();
     loadAll();
   }
@@ -99,27 +123,83 @@
       client_id: CFG.CLIENT_ID,
       scope: SCOPE,
       callback: onToken,
-      error_callback: (e) => showLogin('Logowanie przerwane (' + (e.type || 'błąd') + '). Spróbuj ponownie.', true),
+      error_callback: (e) => {
+        const p = pending;
+        pending = null;
+        if (p) p.reject(new Error(e.type || 'login'));
+        else showLogin('Logowanie przerwane (' + (e.type || 'błąd') + '). Spróbuj ponownie.', true);
+      },
     });
     $('#login-btn').disabled = false;
+    // Po starcie z wygasłym tokenem spróbuj po cichu odnowić (bez klikania).
+    if (!state.token && lsGet('consent') === '1') {
+      renewToken().then(() => { setStale(false); showApp(); loadAll(); }).catch(() => {});
+    }
+  }
+
+  // Prosi Google o nowy token bez okna wyboru konta (prompt: ''), jeśli użytkownik już kiedyś się zgodził.
+  function renewToken() {
+    if (state.token && Date.now() < state.tokenExp) return Promise.resolve();
+    if (pending) return pending.promise;
+    if (!tokenClient || lsGet('consent') !== '1') return Promise.reject(new Error('login'));
+    let resolve;
+    let reject;
+    const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+    const timer = setTimeout(() => { if (pending && pending.promise === promise) { pending = null; reject(new Error('timeout')); } }, 20000);
+    pending = {
+      promise,
+      resolve: () => { clearTimeout(timer); resolve(); },
+      reject: (e) => { clearTimeout(timer); reject(e); },
+    };
+    try {
+      tokenClient.requestAccessToken({ prompt: '' });
+    } catch (e) {
+      pending = null;
+      clearTimeout(timer);
+      reject(e);
+    }
+    return promise;
   }
 
   $('#login-btn').addEventListener('click', () => {
-    if (tokenClient) tokenClient.requestAccessToken();
+    if (tokenClient) tokenClient.requestAccessToken({ prompt: lsGet('consent') === '1' ? '' : 'select_account' });
+  });
+  $('#stale-btn').addEventListener('click', async () => {
+    try {
+      await renewToken();
+      setStale(false);
+      loadAll();
+    } catch (e) {
+      showLogin('Zaloguj się ponownie, żeby odświeżyć dane.');
+    }
+  });
+
+  // Gdy aplikacja wraca na ekran (np. po dłuższej przerwie), spróbuj odnowić sesję.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.loaded && (!state.token || Date.now() > state.tokenExp)) {
+      renewToken().then(() => { setStale(false); loadAll(); }).catch(() => setStale(true));
+    }
   });
 
   // ---------- Google Sheets API ----------
-  async function api(path, opts) {
+  async function api(path, opts, retried) {
     if (!state.token || Date.now() > state.tokenExp) {
-      showLogin('Sesja wygasła. Zaloguj się ponownie.');
-      throw new Error('login');
+      try {
+        await renewToken();
+      } catch (e) {
+        showLogin('Sesja wygasła. Dotknij „Zaloguj z Google”, żeby kontynuować.');
+        throw new Error('login');
+      }
     }
     const res = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + CFG.SPREADSHEET_ID + path, {
       ...(opts || {}),
       headers: { Authorization: 'Bearer ' + state.token, 'Content-Type': 'application/json' },
     });
     if (res.status === 401) {
-      showLogin('Sesja wygasła. Zaloguj się ponownie.');
+      state.token = null;
+      lsDel('tok');
+      if (!retried) return api(path, opts, true);
+      showLogin('Sesja wygasła. Dotknij „Zaloguj z Google”, żeby kontynuować.');
       throw new Error('login');
     }
     if (!res.ok) {
@@ -174,6 +254,8 @@
         state.data[c] = parseRows(main, extra);
       });
       state.loaded = true;
+      setStale(false);
+      lsSet('cache', JSON.stringify(state.data));
       renderAll();
     } catch (e) {
       if (e.message !== 'login') {
@@ -539,13 +621,19 @@
       box.innerHTML = '<div class="card center muted">Brak tankowań dla ' + esc(state.car) + '.</div>';
       return;
     }
-    const o = L.computeOverall(stats);
-    box.innerHTML =
-      '<div class="card"><div class="grid3">' +
+    const month = todayISO().slice(0, 7);
+    const monthName = new Date(month + '-15T12:00:00').toLocaleDateString('pl-PL', { month: 'long', year: 'numeric' });
+    const sumCard = (title, o) =>
+      '<div class="card"><div class="muted" style="margin-bottom:8px">' + esc(title) + '</div><div class="grid3">' +
       '<div class="stat"><div class="l">Tankowań</div><div class="v">' + o.count + '</div></div>' +
       '<div class="stat"><div class="l">Litry</div><div class="v">' + fmt(o.totalLiters, 1) + '</div></div>' +
       '<div class="stat"><div class="l">Śr. cena</div><div class="v">' + (o.avgPrice != null ? fmt(o.avgPrice) + ' zł' : '—') + '</div></div>' +
-      '</div></div>' + stats.map(entryHtml).join('');
+      '</div></div>';
+    const inMonth = stats.filter((s) => (s.entry.date || '').startsWith(month));
+    box.innerHTML =
+      sumCard('Cały okres', L.computeOverall(stats)) +
+      sumCard(monthName.charAt(0).toUpperCase() + monthName.slice(1), L.computeOverall(inMonth)) +
+      stats.map(entryHtml).join('');
   }
 
   async function onEntryClick(e) {
@@ -807,6 +895,16 @@
     if (state.token) {
       showApp();
       loadAll();
+    } else if (lsGet('consent') === '1' && lsGet('cache')) {
+      // Sesja wygasła, ale zalogowałeś się już wcześniej: pokaż ostatnie dane i odnów logowanie w tle.
+      try {
+        state.data = JSON.parse(lsGet('cache'));
+        state.loaded = true;
+        setStale(true);
+        showApp();
+      } catch (e) {
+        showLogin();
+      }
     } else {
       showLogin();
     }

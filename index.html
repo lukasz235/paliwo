@@ -17,7 +17,7 @@
   :root {
     color-scheme: dark;
     --bg: #0b1220; --card: #162033; --text: #f1f5f9; --muted: #94a3b8; --line: #263449;
-    --accent: #22d3ee; --accent-text: #06202a; --good: #4ade80; --bad: #f87171; --chip: #263449; --tot: #0e3a4a;
+    --accent: #5fa8bd; --accent-text: #0a1a22; --good: #4ade80; --bad: #f87171; --chip: #263449; --tot: #17323d;
   }
   * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
   html, body { margin: 0; background: var(--bg); color: var(--text);
@@ -121,6 +121,9 @@
   .loc .muted { flex: 1; }
   .loc button { border: 0; background: var(--chip); color: var(--text); padding: 8px 12px; border-radius: 10px; font-size: 14px; }
   .center { text-align: center; padding: 40px 10px; }
+  #login-view:not([hidden]) { display: flex; min-height: 100vh; align-items: center; justify-content: center; }
+  #login-view main { width: 100%; padding-bottom: 20px; }
+  #login-view .card { padding: 28px 18px; }
   .spin { display: inline-block; width: 16px; height: 16px; border: 2px solid var(--line);
     border-top-color: var(--accent); border-radius: 50%; animation: s .8s linear infinite; vertical-align: -3px; }
   @keyframes s { to { transform: rotate(360deg); } }
@@ -131,9 +134,7 @@
 <section id="login-view" hidden>
   <main>
     <div class="card center">
-      <h1 style="margin:0 0 6px">Paliwo</h1>
-      <p class="muted" id="login-msg">Zaloguj się kontem Google, które ma dostęp do arkusza „fuel”.</p>
-      <button class="btn" id="login-btn">Zaloguj z Google</button>
+      <button class="btn" id="login-btn" style="margin-top:0">Zaloguj się kontem Google</button>
       <p class="err" id="login-err" hidden></p>
     </div>
   </main>
@@ -141,6 +142,10 @@
 
 <div id="app" hidden>
   <header><div class="cars" id="cars"></div></header>
+  <div id="stale-banner" class="banner" hidden style="max-width:640px;margin:0 14px 8px;display:flex;gap:10px;align-items:center;justify-content:space-between">
+    <span>Dane z ostatniej synchronizacji. Połącz ponownie, żeby je odświeżyć.</span>
+    <button id="stale-btn" class="chip on" type="button">Połącz</button>
+  </div>
   <main>
     <section id="view-home"></section>
     <section id="view-history" hidden></section>

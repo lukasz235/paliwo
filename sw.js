@@ -1,6 +1,6 @@
 // Service worker: zapisuje w pamięci podręcznej pliki aplikacji, żeby otwierała się szybko i bez sieci.
 // Dane z arkusza zawsze idą przez internet. Zmień VERSION po każdej zmianie plików aplikacji.
-const VERSION = 'paliwo-v2';
+const VERSION = 'paliwo-v4';
 const SHELL = [
   './',
   'index.html',
